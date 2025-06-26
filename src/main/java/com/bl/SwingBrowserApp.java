@@ -44,6 +44,7 @@ import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
+import javax.swing.JSlider;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
@@ -76,8 +77,9 @@ public class SwingBrowserApp extends JFrame {
     private JButton goButton, backButton, forwardButton, refreshButton;
     private JButton homeButton, bookmarksButton, historyButton, settingsButton;
     private JProgressBar progressBar;
-    private JLabel statusLabel;
+    private JLabel statusLabel, zoomLabel;
     private JTabbedPane tabbedPane;
+    private JSlider zoomSlider;
 
     // Dados
     private List<String> history = new ArrayList<>();
@@ -86,12 +88,12 @@ public class SwingBrowserApp extends JFrame {
 
     // Configurações de dimensionamento
     private float scalingFactor = 1.0f;
+    private double currentZoom = 1.0;
 
     public SwingBrowserApp() {
-        // Configuração inicial responsiva
+        loadPreferences();
         configureScaling();
         configureWindow();
-        loadPreferences();
         loadData();
         setupLookAndFeel();
         createComponents();
@@ -99,22 +101,24 @@ public class SwingBrowserApp extends JFrame {
         setupListeners();
         setupWebView();
         loadInitialPage();
-        // Adicione estas linhas no final:
         setExtendedState(JFrame.MAXIMIZED_BOTH);
-        updateComponentSizes(); // Força o tamanho correto inicial
+        updateComponentSizes();
     }
 
     private void configureScaling() {
-        // Usar a resolução física do monitor, não da janela
         GraphicsDevice gd = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice();
         int screenWidth = gd.getDisplayMode().getWidth();
-
-        // Calcular fator fixo baseado na resolução do monitor
         scalingFactor = Math.max(0.8f, Math.min(1.5f, screenWidth / 1920f));
 
-        // Ajuste extra para telas muito grandes
         if (screenWidth > 3000) {
             scalingFactor = 1.3f;
+        }
+
+        // Carrega o zoom salvo nas preferências, só se prefs já foi inicializado
+        if (prefs != null) {
+            currentZoom = prefs.getDouble("zoomLevel", 1.0);
+        } else {
+            currentZoom = 1.0; // Valor padrão se prefs ainda não estiver disponível
         }
     }
 
@@ -270,11 +274,17 @@ public class SwingBrowserApp extends JFrame {
                 (int) (5 * scalingFactor)));
 
         // Painel de botões de navegação
-        JPanel navButtons = new JPanel(new GridLayout(1, 7, (int) (5 * scalingFactor), 0));
+        JPanel navButtons = new JPanel(new GridLayout(1, 8, (int) (5 * scalingFactor), 0)); // Alterado para 8 colunas
         navButtons.add(backButton);
         navButtons.add(forwardButton);
         navButtons.add(refreshButton);
         navButtons.add(homeButton);
+
+        // Botão de nova aba
+        JButton newTabButton = createScaledButton("+", "Nova Aba");
+        newTabButton.addActionListener(e -> createNewTab());
+        navButtons.add(newTabButton);
+
         navButtons.add(bookmarksButton);
         navButtons.add(historyButton);
         navButtons.add(settingsButton);
@@ -283,18 +293,201 @@ public class SwingBrowserApp extends JFrame {
         navPanel.add(urlBar, BorderLayout.CENTER);
         navPanel.add(goButton, BorderLayout.EAST);
 
+        // Painel de zoom - movido para dentro da barra de navegação
+        JPanel zoomPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+        zoomLabel = new JLabel("Zoom: 100%");
+        zoomLabel.setFont(deriveFont(zoomLabel.getFont()));
+
+        zoomSlider = new JSlider(50, 200, 100);
+        zoomSlider.setMajorTickSpacing(25);
+        zoomSlider.setPaintTicks(true);
+        zoomSlider.setFont(deriveFont(zoomSlider.getFont()));
+        zoomSlider.addChangeListener(e -> {
+            int value = zoomSlider.getValue();
+            currentZoom = value / 100.0;
+            updateZoom();
+        });
+
+        zoomPanel.add(zoomLabel);
+        zoomPanel.add(zoomSlider);
+
+        // Adiciona o painel de zoom à direita da barra de navegação
+        JPanel rightPanel = new JPanel(new BorderLayout());
+        rightPanel.add(zoomPanel, BorderLayout.EAST);
+        navPanel.add(rightPanel, BorderLayout.EAST);
+
         // Painel de status
         JPanel statusPanel = new JPanel(new BorderLayout());
         statusPanel.add(progressBar, BorderLayout.CENTER);
         statusPanel.add(statusLabel, BorderLayout.EAST);
 
-        // Layout principal com bordas proporcionais
+        // Layout principal
         JPanel contentPanel = new JPanel(new BorderLayout());
         contentPanel.add(navPanel, BorderLayout.NORTH);
         contentPanel.add(tabbedPane, BorderLayout.CENTER);
         contentPanel.add(statusPanel, BorderLayout.SOUTH);
 
         add(contentPanel);
+    }
+
+    private void createNewTab() {
+        JFXPanel newFxPanel = new JFXPanel();
+
+        Platform.runLater(() -> {
+            try {
+                WebView newWebView = new WebView();
+                WebEngine newWebEngine = newWebView.getEngine();
+
+                // Configurações do WebView com zoom inicial
+                newWebView.setZoom(currentZoom);
+                newWebView.setFontScale(currentZoom * scalingFactor);
+                newWebEngine.setJavaScriptEnabled(isJavaScriptEnabled());
+                newWebEngine.setUserAgent(getUserAgent());
+
+                // Configura listeners para a nova aba
+                setupWebEngineListeners(newWebEngine);
+
+                // Cria a cena JavaFX
+                BorderPane webPane = new BorderPane(newWebView);
+                Scene scene = new Scene(webPane);
+                newFxPanel.setScene(scene);
+
+                // Adiciona a nova aba
+                SwingUtilities.invokeLater(() -> {
+                    addNewTab("Nova aba", newFxPanel);
+                    // Carrega a página inicial na nova aba
+                    newWebEngine.load(getHomePage());
+                });
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(SwingBrowserApp.this,
+                            "Erro ao criar nova aba: " + e.getMessage(),
+                            "Erro", JOptionPane.ERROR_MESSAGE);
+                });
+            }
+        });
+    }
+
+    private void setupWebEngineListeners(WebEngine engine) {
+        // Listener para atualizar a URL na barra de endereço
+        engine.locationProperty().addListener((obs, oldUrl, newUrl) -> {
+            SwingUtilities.invokeLater(() -> {
+                // Atualiza apenas se for a aba selecionada
+                if (tabbedPane.getSelectedComponent() != null &&
+                        tabbedPane.getSelectedComponent() instanceof JPanel &&
+                        ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0) instanceof JFXPanel &&
+                        ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene() != null &&
+                        ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene()
+                                .getRoot() instanceof BorderPane
+                        &&
+                        ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0))
+                                .getScene()
+                                .getRoot()).getCenter() instanceof WebView
+                        &&
+                        ((WebView) ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent())
+                                .getComponent(0))
+                                .getScene().getRoot()).getCenter()).getEngine() == engine) {
+
+                    urlBar.setText(newUrl);
+                    addToHistory(newUrl);
+                    updateNavButtons();
+                }
+            });
+        });
+
+        // Listener para atualizar o título da aba e da janela
+        engine.titleProperty().addListener((obs, oldTitle, newTitle) -> {
+            SwingUtilities.invokeLater(() -> {
+                // Atualiza o título da aba correspondente
+                for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+                    Component tabComponent = tabbedPane.getComponentAt(i);
+                    if (tabComponent instanceof JPanel) {
+                        Component webComponent = ((JPanel) tabComponent).getComponent(0);
+                        if (webComponent instanceof JFXPanel) {
+                            JFXPanel fxPanel = (JFXPanel) webComponent;
+                            if (fxPanel.getScene() != null &&
+                                    fxPanel.getScene().getRoot() instanceof BorderPane &&
+                                    ((BorderPane) fxPanel.getScene().getRoot()).getCenter() instanceof WebView &&
+                                    ((WebView) ((BorderPane) fxPanel.getScene().getRoot()).getCenter())
+                                            .getEngine() == engine) {
+
+                                updateTabTitle(i, newTitle);
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+        });
+
+        // Listener para a barra de progresso
+        engine.getLoadWorker().progressProperty().addListener((obs, oldProgress, newProgress) -> {
+            SwingUtilities.invokeLater(() -> {
+                int progress = (int) (newProgress.doubleValue() * 100);
+                progressBar.setValue(progress);
+                statusLabel.setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
+            });
+        });
+
+        // Listener para erros de carregamento
+        engine.getLoadWorker().exceptionProperty().addListener((obs, oldException, newException) -> {
+            if (newException != null) {
+                SwingUtilities.invokeLater(() -> {
+                    statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
+                    JOptionPane.showMessageDialog(SwingBrowserApp.this,
+                            "Erro ao carregar página: " + newException.getMessage(),
+                            "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
+                });
+            }
+        });
+
+        // Listener para mensagens de status
+        engine.setOnStatusChanged(event -> {
+            SwingUtilities.invokeLater(() -> {
+                statusLabel.setText(event.getData());
+            });
+        });
+
+        // Listener para atualizar botões de navegação
+        engine.getHistory().currentIndexProperty().addListener((obs, oldIndex, newIndex) -> {
+            SwingUtilities.invokeLater(() -> {
+                updateNavButtons();
+            });
+        });
+    }
+
+    private void updateTabTitle(int tabIndex, String title) {
+        if (tabIndex >= 0 && tabIndex < tabbedPane.getTabCount()) {
+            Component tabComponent = tabbedPane.getTabComponentAt(tabIndex);
+            if (tabComponent instanceof JPanel) {
+                for (Component c : ((JPanel) tabComponent).getComponents()) {
+                    if (c instanceof JLabel) {
+                        ((JLabel) c).setText(title);
+                        break;
+                    }
+                }
+            }
+
+            // Atualiza o título da janela se for a aba selecionada
+            if (tabbedPane.getSelectedIndex() == tabIndex) {
+                setTitle(title + " - " + APP_NAME);
+            }
+        }
+    }
+
+    private void updateZoom() {
+        Platform.runLater(() -> {
+            if (webView != null) {
+                webView.setZoom(currentZoom);
+                zoomLabel.setText(String.format("Zoom: %d%%", (int) (currentZoom * 100)));
+
+                // Ajusta o tamanho da fonte baseado no zoom
+                webView.setFontScale(currentZoom * scalingFactor);
+
+                // Salva o zoom nas preferências
+                prefs.putDouble("zoomLevel", currentZoom);
+            }
+        });
     }
 
     private void setupListeners() {
@@ -368,63 +561,84 @@ public class SwingBrowserApp extends JFrame {
 
     private void setupWebView() {
         fxPanel = new JFXPanel();
+        createNewTab(); // Substitui o código antigo por uma chamada ao novo método
+
+        // Configurações específicas para Linux
+        if (System.getProperty("os.name").toLowerCase().contains("linux")) {
+            System.setProperty("prism.order", "sw");
+            System.setProperty("prism.text", "t2k");
+        }
 
         Platform.runLater(() -> {
-            webView = new WebView();
-            webEngine = webView.getEngine();
+            try {
+                webView = new WebView();
+                webEngine = webView.getEngine();
 
-            // Configuração do WebView
-            webEngine.setJavaScriptEnabled(isJavaScriptEnabled());
-            webEngine.setUserAgent(getUserAgent());
+                // Configurações do WebView com zoom inicial
+                webView.setZoom(currentZoom);
+                webView.setFontScale(currentZoom * scalingFactor);
 
-            // Cria a cena JavaFX
-            BorderPane webPane = new BorderPane(webView);
-            Scene scene = new Scene(webPane);
-            fxPanel.setScene(scene);
+                webEngine.setJavaScriptEnabled(isJavaScriptEnabled());
+                webEngine.setUserAgent(getUserAgent());
 
-            // Listeners do WebEngine
-            webEngine.locationProperty().addListener((obs, oldUrl, newUrl) -> {
-                SwingUtilities.invokeLater(() -> {
-                    urlBar.setText(newUrl);
-                    addToHistory(newUrl);
-                    updateNavButtons();
-                });
-            });
+                // Cria a cena JavaFX
+                BorderPane webPane = new BorderPane(webView);
+                Scene scene = new Scene(webPane);
+                fxPanel.setScene(scene);
 
-            webEngine.titleProperty().addListener((obs, oldTitle, newTitle) -> {
-                SwingUtilities.invokeLater(() -> {
-                    setTitle(newTitle + " - " + APP_NAME);
-                    updateTabTitle(newTitle);
-                });
-            });
-
-            webEngine.getLoadWorker().progressProperty().addListener((obs, oldProgress, newProgress) -> {
-                SwingUtilities.invokeLater(() -> {
-                    int progress = (int) (newProgress.doubleValue() * 100);
-                    progressBar.setValue(progress);
-                    statusLabel.setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
-                });
-            });
-
-            webEngine.getLoadWorker().exceptionProperty().addListener((obs, oldException, newException) -> {
-                if (newException != null) {
+                // Listeners do WebEngine (mantidos como antes)
+                webEngine.locationProperty().addListener((obs, oldUrl, newUrl) -> {
                     SwingUtilities.invokeLater(() -> {
-                        statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
-                        JOptionPane.showMessageDialog(SwingBrowserApp.this,
-                                "Erro ao carregar página: " + newException.getMessage(),
-                                "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
+                        urlBar.setText(newUrl);
+                        addToHistory(newUrl);
+                        updateNavButtons();
                     });
-                }
-            });
-
-            webEngine.setOnStatusChanged(event -> {
-                SwingUtilities.invokeLater(() -> {
-                    statusLabel.setText(event.getData());
                 });
-            });
 
-            // Adiciona o WebView a uma nova aba
-            addNewTab("Nova aba", fxPanel);
+                webEngine.titleProperty().addListener((obs, oldTitle, newTitle) -> {
+                    SwingUtilities.invokeLater(() -> {
+                        setTitle(newTitle + " - " + APP_NAME);
+                        updateTabTitle(newTitle);
+                    });
+                });
+
+                webEngine.getLoadWorker().progressProperty().addListener((obs, oldProgress, newProgress) -> {
+                    SwingUtilities.invokeLater(() -> {
+                        int progress = (int) (newProgress.doubleValue() * 100);
+                        progressBar.setValue(progress);
+                        statusLabel
+                                .setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
+                    });
+                });
+
+                webEngine.getLoadWorker().exceptionProperty().addListener((obs, oldException, newException) -> {
+                    if (newException != null) {
+                        SwingUtilities.invokeLater(() -> {
+                            statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
+                            JOptionPane.showMessageDialog(SwingBrowserApp.this,
+                                    "Erro ao carregar página: " + newException.getMessage(),
+                                    "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
+                        });
+                    }
+                });
+
+                webEngine.setOnStatusChanged(event -> {
+                    SwingUtilities.invokeLater(() -> {
+                        statusLabel.setText(event.getData());
+                    });
+                });
+
+                // Adiciona o WebView a uma nova aba
+                addNewTab("Nova aba", fxPanel);
+                // Adiciona o WebView a uma nova aba
+                addNewTab("Nova aba", fxPanel);
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> {
+                    JOptionPane.showMessageDialog(SwingBrowserApp.this,
+                            "Erro ao inicializar WebView: " + e.getMessage(),
+                            "Erro de Renderização", JOptionPane.ERROR_MESSAGE);
+                });
+            }
         });
     }
 
@@ -612,10 +826,13 @@ public class SwingBrowserApp extends JFrame {
 
     private void showSettingsDialog() {
         JDialog settingsDialog = new JDialog(this, "Configurações", true);
-        settingsDialog.setSize((int) (500 * scalingFactor), (int) (300 * scalingFactor));
+        settingsDialog.setSize((int) (500 * scalingFactor), (int) (350 * scalingFactor)); // Aumentado para 350
         settingsDialog.setLocationRelativeTo(this);
 
-        JPanel panel = new JPanel(new GridLayout(4, 2, (int) (10 * scalingFactor), (int) (10 * scalingFactor)));
+        JPanel panel = new JPanel(new GridLayout(5, 2, (int) (10 * scalingFactor), (int) (10 * scalingFactor))); // Alterado
+                                                                                                                 // para
+                                                                                                                 // 5
+                                                                                                                 // linhas
         panel.setBorder(BorderFactory.createEmptyBorder(
                 (int) (20 * scalingFactor),
                 (int) (20 * scalingFactor),
@@ -649,6 +866,15 @@ public class SwingBrowserApp extends JFrame {
         userAgentField.setFont(deriveFont(userAgentField.getFont()));
         panel.add(userAgentField);
 
+        // Zoom padrão
+        JLabel defaultZoomLabel = new JLabel("Zoom padrão (%):");
+        defaultZoomLabel.setFont(deriveFont(defaultZoomLabel.getFont()));
+        panel.add(defaultZoomLabel);
+
+        JTextField defaultZoomField = new JTextField(String.valueOf((int) (currentZoom * 100)));
+        defaultZoomField.setFont(deriveFont(defaultZoomField.getFont()));
+        panel.add(defaultZoomField);
+
         // Botões
         JButton saveButton = new JButton("Salvar");
         saveButton.setFont(deriveFont(saveButton.getFont()));
@@ -656,6 +882,17 @@ public class SwingBrowserApp extends JFrame {
             setHomePage(homePageField.getText().trim());
             setJavaScriptEnabled(enableJsCheckbox.isSelected());
             setUserAgent(userAgentField.getText().trim());
+
+            try {
+                int zoomValue = Integer.parseInt(defaultZoomField.getText().trim());
+                zoomValue = Math.max(50, Math.min(200, zoomValue));
+                currentZoom = zoomValue / 100.0;
+                zoomSlider.setValue(zoomValue);
+                updateZoom();
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(this, "Valor de zoom inválido. Use um número entre 50 e 200.");
+            }
+
             settingsDialog.dispose();
         });
 
@@ -727,6 +964,11 @@ public class SwingBrowserApp extends JFrame {
     }
 
     public static void main(String[] args) {
+        // Configurações para Linux antes de iniciar a aplicação
+        System.setProperty("prism.order", "sw");
+        System.setProperty("prism.text", "t2k");
+        System.setProperty("prism.lcdtext", "false");
+
         SwingUtilities.invokeLater(() -> {
             try {
                 new SwingBrowserApp().setVisible(true);
