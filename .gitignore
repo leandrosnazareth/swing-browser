@@ -1,0 +1,63 @@
+# Diretórios e arquivos do Maven
+/target/
+!**/src/main/**/target/
+/.mvn/
+.mvn/wrapper/maven-wrapper.jar
+**/pom.xml.tag
+**/pom.xml.releaseBackup
+**/pom.xml.versionsBackup
+**/pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+
+# Arquivos de log
+*.log
+*.log.*
+
+# Arquivos do sistema operacional
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+
+# Arquivos IDE (Eclipse, IntelliJ, NetBeans, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+/.vscode/
+out/
+.classpath
+.project
+.settings/
+nb-configuration.xml
+
+# Binários e metadados
+/bin/
+*/target/
+/build/
+*.class
+*.jar
+*.war
+*.ear
+
+# Bibliotecas externas
+lib/
+
+# Logs de execução
+hs_err_pid*
+
+# Arquivos temporários ou de backup
+*.tmp
+*.temp
+*.backup
+*.old
+
+# Cache e metadados do JavaFX
+.jfxcache/
+*.fxlog
+
+# Outras configurações
+!.gitignore
