@@ -23,8 +23,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.prefs.Preferences;
 
@@ -85,6 +87,10 @@ public class SwingBrowserApp extends JFrame {
     private List<String> history = new ArrayList<>();
     private Set<String> bookmarks = new LinkedHashSet<>();
     private Preferences prefs;
+
+    // Rastreamento de WebEngines por aba
+    private Map<Integer, WebEngine> tabEngines = new HashMap<>();
+    private Map<Integer, WebView> tabWebViews = new HashMap<>();
 
     // Configurações de dimensionamento
     private float scalingFactor = 1.0f;
@@ -355,6 +361,9 @@ public class SwingBrowserApp extends JFrame {
                 // Adiciona a nova aba
                 SwingUtilities.invokeLater(() -> {
                     addNewTab("Nova aba", newFxPanel);
+                    // Armazena o engine e webview da nova aba
+                    int newTabIndex = tabbedPane.getTabCount() - 1;
+                    storeTabEngine(newTabIndex, newWebEngine, newWebView);
                     // Carrega a página inicial na nova aba
                     newWebEngine.load(getHomePage());
                 });
@@ -477,12 +486,13 @@ public class SwingBrowserApp extends JFrame {
 
     private void updateZoom() {
         Platform.runLater(() -> {
-            if (webView != null) {
-                webView.setZoom(currentZoom);
+            WebView currentWebView = getActiveWebView();
+            if (currentWebView != null) {
+                currentWebView.setZoom(currentZoom);
                 zoomLabel.setText(String.format("Zoom: %d%%", (int) (currentZoom * 100)));
 
                 // Ajusta o tamanho da fonte baseado no zoom
-                webView.setFontScale(currentZoom * scalingFactor);
+                currentWebView.setFontScale(currentZoom * scalingFactor);
 
                 // Salva o zoom nas preferências
                 prefs.putDouble("zoomLevel", currentZoom);
@@ -490,7 +500,49 @@ public class SwingBrowserApp extends JFrame {
         });
     }
 
+    /**
+     * Retorna o WebView da aba selecionada no momento
+     */
+    private WebView getActiveWebView() {
+        int selectedIndex = tabbedPane.getSelectedIndex();
+        if (selectedIndex >= 0) {
+            return tabWebViews.get(selectedIndex);
+        }
+        return webView; // Fallback para o webview principal
+    }
+
     private void setupListeners() {
+        // Listener para mudança de aba - atualiza webEngine e webView ativos
+        tabbedPane.addChangeListener(e -> {
+            int selectedIndex = tabbedPane.getSelectedIndex();
+            if (selectedIndex >= 0) {
+                WebEngine newEngine = tabEngines.get(selectedIndex);
+                WebView newWebView = tabWebViews.get(selectedIndex);
+
+                if (newEngine != null && newWebView != null) {
+                    webEngine = newEngine;
+                    webView = newWebView;
+
+                    // Atualizar barra de URL com a URL da aba selecionada
+                    Platform.runLater(() -> {
+                        String currentUrl = newEngine.getLocation();
+                        if (currentUrl != null && !currentUrl.isEmpty()) {
+                            urlBar.setText(currentUrl);
+                        }
+                    });
+
+                    // Atualizar status dos botões de navegação
+                    updateNavButtons();
+
+                    // Atualizar zoom
+                    Platform.runLater(() -> {
+                        newWebView.setZoom(currentZoom);
+                        zoomLabel.setText(String.format("Zoom: %d%%", (int) (currentZoom * 100)));
+                    });
+                }
+            }
+        });
+
         // Ação para carregar URL
         ActionListener loadUrlAction = e -> {
             String url = urlBar.getText().trim();
@@ -504,18 +556,26 @@ public class SwingBrowserApp extends JFrame {
 
         // Botões de navegação
         backButton.addActionListener(e -> Platform.runLater(() -> {
-            if (webEngine.getHistory().getCurrentIndex() > 0) {
-                webEngine.getHistory().go(-1);
+            WebEngine currentEngine = getActiveWebEngine();
+            if (currentEngine != null && currentEngine.getHistory().getCurrentIndex() > 0) {
+                currentEngine.getHistory().go(-1);
             }
         }));
 
         forwardButton.addActionListener(e -> Platform.runLater(() -> {
-            if (webEngine.getHistory().getCurrentIndex() < webEngine.getHistory().getEntries().size() - 1) {
-                webEngine.getHistory().go(1);
+            WebEngine currentEngine = getActiveWebEngine();
+            if (currentEngine != null && currentEngine.getHistory()
+                    .getCurrentIndex() < currentEngine.getHistory().getEntries().size() - 1) {
+                currentEngine.getHistory().go(1);
             }
         }));
 
-        refreshButton.addActionListener(e -> Platform.runLater(() -> webEngine.reload()));
+        refreshButton.addActionListener(e -> Platform.runLater(() -> {
+            WebEngine currentEngine = getActiveWebEngine();
+            if (currentEngine != null) {
+                currentEngine.reload();
+            }
+        }));
         homeButton.addActionListener(e -> loadUrl(getHomePage()));
 
         // Menu de favoritos
@@ -561,7 +621,6 @@ public class SwingBrowserApp extends JFrame {
 
     private void setupWebView() {
         fxPanel = new JFXPanel();
-        createNewTab(); // Substitui o código antigo por uma chamada ao novo método
 
         // Configurações específicas para Linux
         if (System.getProperty("os.name").toLowerCase().contains("linux")) {
@@ -586,48 +645,18 @@ public class SwingBrowserApp extends JFrame {
                 Scene scene = new Scene(webPane);
                 fxPanel.setScene(scene);
 
-                // Listeners do WebEngine (mantidos como antes)
-                webEngine.locationProperty().addListener((obs, oldUrl, newUrl) -> {
-                    SwingUtilities.invokeLater(() -> {
-                        urlBar.setText(newUrl);
-                        addToHistory(newUrl);
-                        updateNavButtons();
-                    });
-                });
+                // Configura listeners para a aba inicial
+                setupWebEngineListeners(webEngine);
 
-                webEngine.titleProperty().addListener((obs, oldTitle, newTitle) -> {
-                    SwingUtilities.invokeLater(() -> {
-                        setTitle(newTitle + " - " + APP_NAME);
-                        updateTabTitle(newTitle);
-                    });
+                // Adiciona o WebView a uma nova aba
+                SwingUtilities.invokeLater(() -> {
+                    addNewTab("Nova aba", fxPanel);
+                    // Armazena o engine da primeira aba
+                    int firstTabIndex = tabbedPane.getTabCount() - 1;
+                    storeTabEngine(firstTabIndex, webEngine, webView);
+                    // Carrega a página inicial
+                    webEngine.load(getHomePage());
                 });
-
-                webEngine.getLoadWorker().progressProperty().addListener((obs, oldProgress, newProgress) -> {
-                    SwingUtilities.invokeLater(() -> {
-                        int progress = (int) (newProgress.doubleValue() * 100);
-                        progressBar.setValue(progress);
-                        statusLabel
-                                .setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
-                    });
-                });
-
-                webEngine.getLoadWorker().exceptionProperty().addListener((obs, oldException, newException) -> {
-                    if (newException != null) {
-                        SwingUtilities.invokeLater(() -> {
-                            statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
-                            JOptionPane.showMessageDialog(SwingBrowserApp.this,
-                                    "Erro ao carregar página: " + newException.getMessage(),
-                                    "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
-                        });
-                    }
-                });
-
-                webEngine.setOnStatusChanged(event -> {
-                    SwingUtilities.invokeLater(() -> {
-                        statusLabel.setText(event.getData());
-                    });
-                });
-
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
                     JOptionPane.showMessageDialog(SwingBrowserApp.this,
@@ -636,21 +665,6 @@ public class SwingBrowserApp extends JFrame {
                 });
             }
         });
-    }
-
-    private void updateTabTitle(String title) {
-        int index = tabbedPane.getSelectedIndex();
-        if (index >= 0) {
-            Component tabComponent = tabbedPane.getTabComponentAt(index);
-            if (tabComponent instanceof JPanel) {
-                for (Component c : ((JPanel) tabComponent).getComponents()) {
-                    if (c instanceof JLabel) {
-                        ((JLabel) c).setText(title);
-                        break;
-                    }
-                }
-            }
-        }
     }
 
     private void addNewTab(String title, Component component) {
@@ -673,8 +687,12 @@ public class SwingBrowserApp extends JFrame {
         closeButton.setFont(deriveFont(closeButton.getFont()));
 
         closeButton.addActionListener(e -> {
+            int tabIndex = tabbedPane.indexOfComponent(tabPanel);
             if (tabbedPane.getTabCount() > 1) {
-                tabbedPane.remove(tabbedPane.indexOfComponent(tabPanel));
+                tabbedPane.remove(tabIndex);
+                // Remover do mapa de engines
+                tabEngines.remove(tabIndex);
+                tabWebViews.remove(tabIndex);
             } else {
                 loadUrl(getHomePage());
             }
@@ -685,8 +703,17 @@ public class SwingBrowserApp extends JFrame {
         tabHeader.add(closeButton);
 
         tabbedPane.addTab(null, tabPanel);
-        tabbedPane.setTabComponentAt(tabbedPane.getTabCount() - 1, tabHeader);
-        tabbedPane.setSelectedIndex(tabbedPane.getTabCount() - 1);
+        int newTabIndex = tabbedPane.getTabCount() - 1;
+        tabbedPane.setTabComponentAt(newTabIndex, tabHeader);
+        tabbedPane.setSelectedIndex(newTabIndex);
+    }
+
+    /**
+     * Armazenar um WebEngine de uma aba no mapa de rastreamento
+     */
+    private void storeTabEngine(int tabIndex, WebEngine engine, WebView webView) {
+        tabEngines.put(tabIndex, engine);
+        tabWebViews.put(tabIndex, webView);
     }
 
     private void loadInitialPage() {
@@ -696,7 +723,12 @@ public class SwingBrowserApp extends JFrame {
     private void loadUrl(String url) {
         Platform.runLater(() -> {
             try {
-                webEngine.load(url);
+                WebEngine currentEngine = getActiveWebEngine();
+                if (currentEngine != null) {
+                    currentEngine.load(url);
+                } else {
+                    statusLabel.setText("Nenhuma aba ativa");
+                }
             } catch (Exception e) {
                 statusLabel.setText("Erro ao carregar URL: " + e.getMessage());
             }
@@ -712,15 +744,29 @@ public class SwingBrowserApp extends JFrame {
 
     private void updateNavButtons() {
         Platform.runLater(() -> {
-            boolean canGoBack = webEngine.getHistory().getCurrentIndex() > 0;
-            boolean canGoForward = webEngine.getHistory().getCurrentIndex() < webEngine.getHistory().getEntries().size()
-                    - 1;
+            WebEngine currentEngine = getActiveWebEngine();
+            if (currentEngine != null) {
+                boolean canGoBack = currentEngine.getHistory().getCurrentIndex() > 0;
+                boolean canGoForward = currentEngine.getHistory()
+                        .getCurrentIndex() < currentEngine.getHistory().getEntries().size() - 1;
 
-            SwingUtilities.invokeLater(() -> {
-                backButton.setEnabled(canGoBack);
-                forwardButton.setEnabled(canGoForward);
-            });
+                SwingUtilities.invokeLater(() -> {
+                    backButton.setEnabled(canGoBack);
+                    forwardButton.setEnabled(canGoForward);
+                });
+            }
         });
+    }
+
+    /**
+     * Retorna o WebEngine da aba selecionada no momento
+     */
+    private WebEngine getActiveWebEngine() {
+        int selectedIndex = tabbedPane.getSelectedIndex();
+        if (selectedIndex >= 0) {
+            return tabEngines.get(selectedIndex);
+        }
+        return webEngine; // Fallback para o engine principal
     }
 
     private void addToHistory(String url) {
