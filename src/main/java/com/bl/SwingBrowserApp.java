@@ -107,7 +107,6 @@ public class SwingBrowserApp extends JFrame {
         setupLayout();
         setupListeners();
         setupWebView();
-        loadInitialPage();
         setExtendedState(JFrame.MAXIMIZED_BOTH);
         updateComponentSizes();
         startMemoryMonitor(); // Inicia monitoramento de memória
@@ -479,11 +478,15 @@ public class SwingBrowserApp extends JFrame {
 
     private void updateTabTitle(int tabIndex, String title) {
         if (tabIndex >= 0 && tabIndex < tabbedPane.getTabCount()) {
+            // Truncar título a 10 caracteres
+            String truncatedTitle = truncateTitle(title, 10);
+
             Component tabComponent = tabbedPane.getTabComponentAt(tabIndex);
             if (tabComponent instanceof JPanel) {
                 for (Component c : ((JPanel) tabComponent).getComponents()) {
                     if (c instanceof JLabel) {
-                        ((JLabel) c).setText(title);
+                        ((JLabel) c).setText(truncatedTitle);
+                        ((JLabel) c).setToolTipText(title); // Mostrar título completo no tooltip
                         break;
                     }
                 }
@@ -494,6 +497,16 @@ public class SwingBrowserApp extends JFrame {
                 setTitle(title + " - " + APP_NAME);
             }
         }
+    }
+
+    private String truncateTitle(String title, int maxLength) {
+        if (title == null || title.isEmpty()) {
+            return "Nova aba";
+        }
+        if (title.length() <= maxLength) {
+            return title;
+        }
+        return title.substring(0, maxLength - 2) + "..";
     }
 
     private void updateZoom() {
@@ -660,14 +673,15 @@ public class SwingBrowserApp extends JFrame {
                 // Configura listeners para a aba inicial
                 setupWebEngineListeners(webEngine);
 
+                // Carrega a página inicial ANTES de retornar para thread Swing
+                webEngine.load(getHomePage());
+
                 // Adiciona o WebView a uma nova aba
                 SwingUtilities.invokeLater(() -> {
                     addNewTab("Nova aba", fxPanel);
                     // Armazena o engine da primeira aba
                     int firstTabIndex = tabbedPane.getTabCount() - 1;
                     storeTabEngine(firstTabIndex, webEngine, webView);
-                    // Carrega a página inicial
-                    webEngine.load(getHomePage());
                 });
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
@@ -728,10 +742,6 @@ public class SwingBrowserApp extends JFrame {
         tabWebViews.put(tabIndex, webView);
     }
 
-    private void loadInitialPage() {
-        loadUrl(getHomePage());
-    }
-
     private void loadUrl(String url) {
         Platform.runLater(() -> {
             try {
@@ -748,10 +758,28 @@ public class SwingBrowserApp extends JFrame {
     }
 
     private String ensureUrlProtocol(String url) {
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        // Se começa com protocolo conhecido, retorna como está
+        if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("file://")) {
+            return url;
+        }
+
+        // Se contém apenas um ponto e parece um domínio, adiciona protocolo
+        if (url.contains(".") && !url.contains(" ")) {
             return "http://" + url;
         }
-        return url;
+
+        // Se contém espaços ou não parece URL, faz pesquisa Google
+        if (url.contains(" ") || !url.contains(".")) {
+            try {
+                String encodedQuery = java.net.URLEncoder.encode(url, "UTF-8");
+                return "https://www.google.com/search?q=" + encodedQuery;
+            } catch (Exception e) {
+                return "https://www.google.com/search?q=" + url.replace(" ", "+");
+            }
+        }
+
+        // Fallback
+        return "http://" + url;
     }
 
     private void updateNavButtons() {
@@ -1044,14 +1072,14 @@ public class SwingBrowserApp extends JFrame {
             Runtime runtime = Runtime.getRuntime();
             long usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024); // Em MB
             long maxMemory = runtime.maxMemory() / (1024 * 1024); // Em MB
-            
+
             // Calcular percentual de uso
             int percentUsed = (int) ((usedMemory * 100) / maxMemory);
-            
+
             // Atualizar label
             String memoryText = String.format("💾 %d MB", usedMemory);
             memoryLabel.setText(memoryText);
-            
+
             // Mudar cor baseado no uso
             if (percentUsed > 85) {
                 memoryLabel.setForeground(new java.awt.Color(220, 20, 20)); // Vermelho - crítico
