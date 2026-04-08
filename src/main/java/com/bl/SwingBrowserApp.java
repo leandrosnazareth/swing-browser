@@ -52,6 +52,8 @@ import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.google.gson.Gson;
@@ -227,6 +229,24 @@ public class SwingBrowserApp extends JFrame {
         urlBar = new JTextField();
         urlBar.setFont(deriveFont(urlBar.getFont()));
         urlBar.setToolTipText("Digite a URL e pressione Enter");
+        
+        // Adicionar listener para sugestões
+        urlBar.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                showUrlSuggestions();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                showUrlSuggestions();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                showUrlSuggestions();
+            }
+        });
 
         // Botões de navegação com ícones dimensionados
         backButton = createScaledButton("◀", "Voltar");
@@ -1089,6 +1109,65 @@ public class SwingBrowserApp extends JFrame {
                 memoryLabel.setForeground(new java.awt.Color(100, 200, 100)); // Verde - normal
             }
         }
+    }
+
+    /**
+     * Exibe sugestões de URL baseadas no histórico e favoritos
+     */
+    private void showUrlSuggestions() {
+        String input = urlBar.getText().trim().toLowerCase();
+        
+        // Não mostrar sugestões para input vazio ou muito curto
+        if (input.length() < 2) {
+            return;
+        }
+
+        // Coletar sugestões do histórico e favoritos
+        List<String> suggestions = new ArrayList<>();
+        Set<String> uniqueSuggestions = new LinkedHashSet<>(); // Para evitar duplicatas
+
+        // Adicionar sugestões do histórico
+        for (String url : history) {
+            if (url.toLowerCase().contains(input)) {
+                uniqueSuggestions.add(url);
+            }
+        }
+
+        // Adicionar sugestões dos favoritos
+        for (String bookmark : bookmarks) {
+            if (bookmark.toLowerCase().contains(input)) {
+                uniqueSuggestions.add(bookmark);
+            }
+        }
+
+        suggestions.addAll(uniqueSuggestions);
+
+        // Se houver sugestões, mostrar em um popup
+        if (!suggestions.isEmpty() && suggestions.size() <= 10) {
+            showSuggestionsPopup(suggestions);
+        }
+    }
+
+    /**
+     * Mostra popup com sugestões de URL
+     */
+    private void showSuggestionsPopup(List<String> suggestions) {
+        JPopupMenu suggestionsMenu = new JPopupMenu();
+        suggestionsMenu.setFont(deriveFont(suggestionsMenu.getFont()));
+
+        for (String suggestion : suggestions) {
+            JMenuItem item = new JMenuItem(shortenUrl(suggestion, 60));
+            item.setFont(deriveFont(item.getFont()));
+            item.setToolTipText(suggestion); // Mostrar URL completa no tooltip
+            item.addActionListener(e -> {
+                urlBar.setText(suggestion);
+                suggestionsMenu.setVisible(false);
+            });
+            suggestionsMenu.add(item);
+        }
+
+        // Mostrar o popup abaixo do campo de URL
+        suggestionsMenu.show(urlBar, 0, urlBar.getHeight());
     }
 
     public static void main(String[] args) {
