@@ -628,10 +628,6 @@ public class SwingBrowserApp extends JFrame {
                     });
                 });
 
-                // Adiciona o WebView a uma nova aba
-                addNewTab("Nova aba", fxPanel);
-                // Adiciona o WebView a uma nova aba
-                addNewTab("Nova aba", fxPanel);
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
                     JOptionPane.showMessageDialog(SwingBrowserApp.this,
