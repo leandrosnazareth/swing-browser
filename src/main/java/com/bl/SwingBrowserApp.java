@@ -79,9 +79,10 @@ public class SwingBrowserApp extends JFrame {
     private JButton goButton, backButton, forwardButton, refreshButton;
     private JButton homeButton, bookmarksButton, historyButton, settingsButton;
     private JProgressBar progressBar;
-    private JLabel statusLabel, zoomLabel;
+    private JLabel statusLabel, zoomLabel, memoryLabel;
     private JTabbedPane tabbedPane;
     private JSlider zoomSlider;
+    private Thread memoryUpdateThread;
 
     // Dados
     private List<String> history = new ArrayList<>();
@@ -109,6 +110,7 @@ public class SwingBrowserApp extends JFrame {
         loadInitialPage();
         setExtendedState(JFrame.MAXIMIZED_BOTH);
         updateComponentSizes();
+        startMemoryMonitor(); // Inicia monitoramento de memória
     }
 
     private void configureScaling() {
@@ -317,9 +319,19 @@ public class SwingBrowserApp extends JFrame {
         zoomPanel.add(zoomLabel);
         zoomPanel.add(zoomSlider);
 
-        // Adiciona o painel de zoom à direita da barra de navegação
+        // Painel de memória com estilo melhorado
+        JPanel memoryPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        memoryLabel = new JLabel("💾 -- MB");
+        memoryLabel.setFont(deriveFont(memoryLabel.getFont()).deriveFont(Font.BOLD));
+        memoryLabel.setToolTipText("Uso de memória do navegador (atualizado a cada 2s)");
+        memoryPanel.add(memoryLabel);
+
+        // Adiciona o painel de zoom e memória à direita da barra de navegação
         JPanel rightPanel = new JPanel(new BorderLayout());
-        rightPanel.add(zoomPanel, BorderLayout.EAST);
+        JPanel infoPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 20, 0));
+        infoPanel.add(zoomPanel);
+        infoPanel.add(memoryPanel);
+        rightPanel.add(infoPanel, BorderLayout.EAST);
         navPanel.add(rightPanel, BorderLayout.EAST);
 
         // Painel de status
@@ -1003,6 +1015,52 @@ public class SwingBrowserApp extends JFrame {
     private void setUserAgent(String userAgent) {
         prefs.put("userAgent", userAgent);
         Platform.runLater(() -> webEngine.setUserAgent(userAgent));
+    }
+
+    /**
+     * Inicia o thread de atualização de memória
+     */
+    private void startMemoryMonitor() {
+        memoryUpdateThread = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    SwingUtilities.invokeLater(this::updateMemoryLabel);
+                    Thread.sleep(2000); // Atualizar a cada 2 segundos
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }, "MemoryMonitor");
+        memoryUpdateThread.setDaemon(true);
+        memoryUpdateThread.start();
+    }
+
+    /**
+     * Atualiza o label de memória com informações atuais
+     */
+    private void updateMemoryLabel() {
+        if (memoryLabel != null) {
+            Runtime runtime = Runtime.getRuntime();
+            long usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024); // Em MB
+            long maxMemory = runtime.maxMemory() / (1024 * 1024); // Em MB
+            
+            // Calcular percentual de uso
+            int percentUsed = (int) ((usedMemory * 100) / maxMemory);
+            
+            // Atualizar label
+            String memoryText = String.format("💾 %d MB", usedMemory);
+            memoryLabel.setText(memoryText);
+            
+            // Mudar cor baseado no uso
+            if (percentUsed > 85) {
+                memoryLabel.setForeground(new java.awt.Color(220, 20, 20)); // Vermelho - crítico
+            } else if (percentUsed > 70) {
+                memoryLabel.setForeground(new java.awt.Color(255, 165, 0)); // Laranja - alto
+            } else {
+                memoryLabel.setForeground(new java.awt.Color(100, 200, 100)); // Verde - normal
+            }
+        }
     }
 
     public static void main(String[] args) {
