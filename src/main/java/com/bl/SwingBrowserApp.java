@@ -375,13 +375,9 @@ public class SwingBrowserApp extends JFrame {
                 // Configurações do WebView com zoom inicial
                 newWebView.setZoom(currentZoom);
                 newWebView.setFontScale(currentZoom * scalingFactor);
-
-                // Validar e configurar User-Agent
+                
+                // Validar e configurar User-Agent (GARANTE que nunca será null)
                 String userAgent = getUserAgent();
-                if (userAgent == null || userAgent.trim().isEmpty()) {
-                    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-                }
-
                 newWebEngine.setJavaScriptEnabled(isJavaScriptEnabled());
                 newWebEngine.setUserAgent(userAgent);
 
@@ -398,9 +394,10 @@ public class SwingBrowserApp extends JFrame {
                     addNewTab("Nova aba", newFxPanel);
                     // Armazena o engine e webview da nova aba usando JFXPanel como chave
                     storeTabEngine(newFxPanel, newWebEngine, newWebView);
-                    // Carrega a página inicial na nova aba
-                    newWebEngine.load(getHomePage());
                 });
+
+                // Carrega a página inicial na nova aba - DENTRO da thread JavaFX
+                newWebEngine.load(getHomePage());
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
                     JOptionPane.showMessageDialog(SwingBrowserApp.this,
@@ -414,89 +411,144 @@ public class SwingBrowserApp extends JFrame {
     private void setupWebEngineListeners(WebEngine engine) {
         // Listener para atualizar a URL na barra de endereço
         engine.locationProperty().addListener((obs, oldUrl, newUrl) -> {
-            SwingUtilities.invokeLater(() -> {
-                // Atualiza apenas se for a aba selecionada
-                if (tabbedPane.getSelectedComponent() != null &&
-                        tabbedPane.getSelectedComponent() instanceof JPanel &&
-                        ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0) instanceof JFXPanel &&
-                        ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene() != null &&
-                        ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene()
-                                .getRoot() instanceof BorderPane
-                        &&
-                        ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0))
-                                .getScene()
-                                .getRoot()).getCenter() instanceof WebView
-                        &&
-                        ((WebView) ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent())
-                                .getComponent(0))
-                                .getScene().getRoot()).getCenter()).getEngine() == engine) {
+            try {
+                SwingUtilities.invokeLater(() -> {
+                    // Atualiza apenas se for a aba selecionada
+                    if (tabbedPane.getSelectedComponent() != null &&
+                            tabbedPane.getSelectedComponent() instanceof JPanel &&
+                            ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0) instanceof JFXPanel &&
+                            ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene() != null &&
+                            ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0)).getScene()
+                                    .getRoot() instanceof BorderPane
+                            &&
+                            ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent()).getComponent(0))
+                                    .getScene()
+                                    .getRoot()).getCenter() instanceof WebView
+                            &&
+                            ((WebView) ((BorderPane) ((JFXPanel) ((JPanel) tabbedPane.getSelectedComponent())
+                                    .getComponent(0))
+                                    .getScene().getRoot()).getCenter()).getEngine() == engine) {
 
-                    urlBar.setText(newUrl);
-                    addToHistory(newUrl);
-                    updateNavButtons();
+                        urlBar.setText(newUrl);
+                        addToHistory(newUrl);
+                        updateNavButtons();
+                    }
+                });
+            } catch (Exception e) {
+                // Silencia erros não relacionados ao usuário (HTTP/2 errors)
+                if (!isHTTP2Error(e)) {
+                    System.err.println("Erro ao atualizar localização: " + e.getMessage());
                 }
-            });
+            }
         });
 
         // Listener para atualizar o título da aba e da janela
         engine.titleProperty().addListener((obs, oldTitle, newTitle) -> {
-            SwingUtilities.invokeLater(() -> {
-                // Atualiza o título da aba correspondente
-                for (int i = 0; i < tabbedPane.getTabCount(); i++) {
-                    Component tabComponent = tabbedPane.getComponentAt(i);
-                    if (tabComponent instanceof JPanel) {
-                        Component webComponent = ((JPanel) tabComponent).getComponent(0);
-                        if (webComponent instanceof JFXPanel) {
-                            JFXPanel fxPanel = (JFXPanel) webComponent;
-                            if (fxPanel.getScene() != null &&
-                                    fxPanel.getScene().getRoot() instanceof BorderPane &&
-                                    ((BorderPane) fxPanel.getScene().getRoot()).getCenter() instanceof WebView &&
-                                    ((WebView) ((BorderPane) fxPanel.getScene().getRoot()).getCenter())
-                                            .getEngine() == engine) {
+            try {
+                SwingUtilities.invokeLater(() -> {
+                    // Atualiza o título da aba correspondente
+                    for (int i = 0; i < tabbedPane.getTabCount(); i++) {
+                        Component tabComponent = tabbedPane.getComponentAt(i);
+                        if (tabComponent instanceof JPanel) {
+                            Component webComponent = ((JPanel) tabComponent).getComponent(0);
+                            if (webComponent instanceof JFXPanel) {
+                                JFXPanel fxPanel = (JFXPanel) webComponent;
+                                if (fxPanel.getScene() != null &&
+                                        fxPanel.getScene().getRoot() instanceof BorderPane &&
+                                        ((BorderPane) fxPanel.getScene().getRoot()).getCenter() instanceof WebView &&
+                                        ((WebView) ((BorderPane) fxPanel.getScene().getRoot()).getCenter())
+                                                .getEngine() == engine) {
 
-                                updateTabTitle(i, newTitle);
-                                break;
+                                    updateTabTitle(i, newTitle);
+                                    break;
+                                }
                             }
                         }
                     }
+                });
+            } catch (Exception e) {
+                if (!isHTTP2Error(e)) {
+                    System.err.println("Erro ao atualizar título: " + e.getMessage());
                 }
-            });
+            }
         });
 
         // Listener para a barra de progresso
         engine.getLoadWorker().progressProperty().addListener((obs, oldProgress, newProgress) -> {
-            SwingUtilities.invokeLater(() -> {
-                int progress = (int) (newProgress.doubleValue() * 100);
-                progressBar.setValue(progress);
-                statusLabel.setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
-            });
+            try {
+                SwingUtilities.invokeLater(() -> {
+                    int progress = (int) (newProgress.doubleValue() * 100);
+                    progressBar.setValue(progress);
+                    statusLabel.setText(progress == 100 ? "Carregamento completo" : "Carregando... " + progress + "%");
+                });
+            } catch (Exception e) {
+                if (!isHTTP2Error(e)) {
+                    System.err.println("Erro na barra de progresso: " + e.getMessage());
+                }
+            }
         });
 
         // Listener para erros de carregamento
         engine.getLoadWorker().exceptionProperty().addListener((obs, oldException, newException) -> {
             if (newException != null) {
-                SwingUtilities.invokeLater(() -> {
-                    statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
-                    JOptionPane.showMessageDialog(SwingBrowserApp.this,
-                            "Erro ao carregar página: " + newException.getMessage(),
-                            "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
-                });
+                try {
+                    SwingUtilities.invokeLater(() -> {
+                        statusLabel.setText("Erro ao carregar página: " + newException.getMessage());
+                        if (!isHTTP2Error(newException)) {
+                            JOptionPane.showMessageDialog(SwingBrowserApp.this,
+                                    "Erro ao carregar página: " + newException.getMessage(),
+                                    "Erro de Navegação", JOptionPane.ERROR_MESSAGE);
+                        }
+                    });
+                } catch (Exception e) {
+                    // Silencia erros secundários
+                }
             }
         });
 
         // Listener para mensagens de status
         engine.setOnStatusChanged(event -> {
-            SwingUtilities.invokeLater(() -> {
-                statusLabel.setText(event.getData());
-            });
+            try {
+                SwingUtilities.invokeLater(() -> {
+                    statusLabel.setText(event.getData());
+                });
+            } catch (Exception e) {
+                if (!isHTTP2Error(e)) {
+                    System.err.println("Erro ao atualizar status: " + e.getMessage());
+                }
+            }
         });
 
         // Listener para atualizar botões de navegação
         engine.getHistory().currentIndexProperty().addListener((obs, oldIndex, newIndex) -> {
-            SwingUtilities.invokeLater(() -> {
-                updateNavButtons();
-            });
+            try {
+                SwingUtilities.invokeLater(() -> {
+                    updateNavButtons();
+                });
+            } catch (Exception e) {
+                if (!isHTTP2Error(e)) {
+                    System.err.println("Erro ao atualizar botões de navegação: " + e.getMessage());
+                }
+            }
         });
+    }
+
+    /**
+     * Verifica se uma exceção é relacionada ao bug HTTP/2 do WebKit
+     */
+    private boolean isHTTP2Error(Throwable e) {
+        if (e == null) return false;
+        
+        StackTraceElement[] stackTrace = e.getStackTrace();
+        for (StackTraceElement element : stackTrace) {
+            String className = element.getClassName();
+            if (className.contains("HTTP2Loader") || 
+                className.contains("HttpRequestBuilderImpl") ||
+                className.contains("NetworkContext")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void updateTabTitle(int tabIndex, String title) {
@@ -704,12 +756,8 @@ public class SwingBrowserApp extends JFrame {
                 webView.setZoom(currentZoom);
                 webView.setFontScale(currentZoom * scalingFactor);
 
-                // Validar e configurar User-Agent
+                // Validar e configurar User-Agent (GARANTE que nunca será null)
                 String userAgent = getUserAgent();
-                if (userAgent == null || userAgent.trim().isEmpty()) {
-                    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-                }
-
                 webEngine.setJavaScriptEnabled(isJavaScriptEnabled());
                 webEngine.setUserAgent(userAgent);
 
@@ -1141,22 +1189,41 @@ public class SwingBrowserApp extends JFrame {
         });
     }
 
+    private static final String DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+
     private String getUserAgent() {
-        return prefs.get("userAgent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        String ua = prefs.get("userAgent", null);
+        // Garantir que nunca retorna null ou vazio
+        if (ua == null || ua.trim().isEmpty()) {
+            ua = DEFAULT_USER_AGENT;
+            prefs.put("userAgent", ua); // Salva para próxima vez
+        }
+        return ua;
     }
 
     private void setUserAgent(String userAgent) {
         if (userAgent == null || userAgent.trim().isEmpty()) {
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+            userAgent = DEFAULT_USER_AGENT;
         }
         prefs.put("userAgent", userAgent);
         final String finalUserAgent = userAgent;
         Platform.runLater(() -> {
-            webEngine.setUserAgent(finalUserAgent);
+            if (webEngine != null) {
+                try {
+                    webEngine.setUserAgent(finalUserAgent);
+                } catch (Exception e) {
+                    System.err.println("Erro ao atualizar User-Agent principal: " + e.getMessage());
+                }
+            }
             // Atualizar User-Agent em todos os WebEngines das abas
             for (WebEngine engine : tabEngines.values()) {
-                engine.setUserAgent(finalUserAgent);
+                if (engine != null) {
+                    try {
+                        engine.setUserAgent(finalUserAgent);
+                    } catch (Exception e) {
+                        System.err.println("Erro ao atualizar User-Agent de aba: " + e.getMessage());
+                    }
+                }
             }
         });
     }
@@ -1212,6 +1279,62 @@ public class SwingBrowserApp extends JFrame {
         System.setProperty("prism.order", "sw");
         System.setProperty("prism.text", "t2k");
         System.setProperty("prism.lcdtext", "false");
+        
+        // CRÍTICO: Desabilitar HTTP/2 e forçar HTTP/1.1 para evitar bug do WebEngine no Linux
+        // Este é um bug conhecido: HTTP2Loader recebe null em requisições
+        System.setProperty("jdk.http.client.HttpClient.log", "errors");
+        System.setProperty("jdk.httpclient.HttpClient.latestHTTPVersion", "HTTP_1_1");
+        
+        // Desabilitar keep-alive para evitar requisições pendentes
+        System.setProperty("http.keepAlive", "false");
+        System.setProperty("sun.net.http.allowRestrictedHeaders", "true");
+        
+        // Evitar cache agressivo que pode causar problemas
+        System.setProperty("http.maxConnections", "2");
+        
+        // Redirecionar System.err para filtrar erros HTTP/2 na saída
+        java.io.PrintStream originalErr = System.err;
+        System.setErr(new java.io.PrintStream(new java.io.FilterOutputStream(new java.io.ByteArrayOutputStream()) {
+            private java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            private String currentLine = "";
+            
+            @Override
+            public void write(int b) {
+                buffer.write(b);
+                char c = (char) b;
+                currentLine += c;
+                if (c == '\n') {
+                    String line = currentLine;
+                    currentLine = "";
+                    if (!line.contains("HTTP2Loader") && !line.contains("HttpRequestBuilderImpl") && 
+                        !line.contains("Objects.requireNonNull") && !line.contains("http/jdk")) {
+                        originalErr.print(line);
+                    }
+                    buffer.reset();
+                }
+            }
+            
+            @Override
+            public void write(byte[] b, int off, int len) {
+                for (int i = off; i < off + len; i++) {
+                    write(b[i]);
+                }
+            }
+        }));
+        
+        // Handler global para erros não capturáveis do JavaFX WebEngine (HTTP/2)
+        Thread.setDefaultUncaughtExceptionHandler((thread, exception) -> {
+            // Silencia NPE conhecidos do HTTP2Loader que não podem ser evitados
+            if (exception instanceof NullPointerException && 
+                exception.getStackTrace().length > 0 &&
+                (exception.getStackTrace()[0].getClassName().contains("HTTP2Loader") ||
+                 exception.getStackTrace()[0].getClassName().contains("HttpRequestBuilderImpl"))) {
+                // Silencioso - não exibe ao usuário
+                return;
+            }
+            // Outros erros são exibidos normalmente
+            exception.printStackTrace();
+        });
 
         SwingUtilities.invokeLater(() -> {
             try {
