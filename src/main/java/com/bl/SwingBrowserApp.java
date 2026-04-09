@@ -32,7 +32,6 @@ import java.util.prefs.Preferences;
 
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
-import javax.swing.Box;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -89,9 +88,10 @@ public class SwingBrowserApp extends JFrame {
     private Set<String> bookmarks = new LinkedHashSet<>();
     private Preferences prefs;
 
-    // Rastreamento de WebEngines por aba
-    private Map<Integer, WebEngine> tabEngines = new HashMap<>();
-    private Map<Integer, WebView> tabWebViews = new HashMap<>();
+    // Rastreamento de WebEngines por aba - usando JFXPanel como chave para evitar
+    // problemas de índice
+    private Map<JFXPanel, WebEngine> tabEngines = new HashMap<>();
+    private Map<JFXPanel, WebView> tabWebViews = new HashMap<>();
 
     // Configurações de dimensionamento
     private float scalingFactor = 1.0f;
@@ -249,10 +249,25 @@ public class SwingBrowserApp extends JFrame {
         statusLabel.setFont(deriveFont(statusLabel.getFont()));
         statusLabel.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
 
-        // Painel de abas
+        // Painel de abas com configurações otimizadas para cliques
         tabbedPane = new JTabbedPane();
         tabbedPane.setFont(deriveFont(tabbedPane.getFont()));
         tabbedPane.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+        tabbedPane.setOpaque(true);
+
+        // Adiciona um MouseListener global ao tabbedPane para melhorar captura de
+        // cliques
+        tabbedPane.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                // Garante que o clique seja processado corretamente
+                int tabIndex = tabbedPane.getUI().tabForCoordinate(tabbedPane, e.getX(), e.getY());
+                if (tabIndex >= 0) {
+                    tabbedPane.setSelectedIndex(tabIndex);
+                    e.consume();
+                }
+            }
+        });
     }
 
     private JButton createScaledButton(String text, String tooltip) {
@@ -349,6 +364,8 @@ public class SwingBrowserApp extends JFrame {
 
     private void createNewTab() {
         JFXPanel newFxPanel = new JFXPanel();
+        newFxPanel.setOpaque(true);
+        newFxPanel.setFocusable(false);
 
         Platform.runLater(() -> {
             try {
@@ -358,8 +375,15 @@ public class SwingBrowserApp extends JFrame {
                 // Configurações do WebView com zoom inicial
                 newWebView.setZoom(currentZoom);
                 newWebView.setFontScale(currentZoom * scalingFactor);
+
+                // Validar e configurar User-Agent
+                String userAgent = getUserAgent();
+                if (userAgent == null || userAgent.trim().isEmpty()) {
+                    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+                }
+
                 newWebEngine.setJavaScriptEnabled(isJavaScriptEnabled());
-                newWebEngine.setUserAgent(getUserAgent());
+                newWebEngine.setUserAgent(userAgent);
 
                 // Configura listeners para a nova aba
                 setupWebEngineListeners(newWebEngine);
@@ -372,9 +396,8 @@ public class SwingBrowserApp extends JFrame {
                 // Adiciona a nova aba
                 SwingUtilities.invokeLater(() -> {
                     addNewTab("Nova aba", newFxPanel);
-                    // Armazena o engine e webview da nova aba
-                    int newTabIndex = tabbedPane.getTabCount() - 1;
-                    storeTabEngine(newTabIndex, newWebEngine, newWebView);
+                    // Armazena o engine e webview da nova aba usando JFXPanel como chave
+                    storeTabEngine(newFxPanel, newWebEngine, newWebView);
                     // Carrega a página inicial na nova aba
                     newWebEngine.load(getHomePage());
                 });
@@ -531,7 +554,17 @@ public class SwingBrowserApp extends JFrame {
     private WebView getActiveWebView() {
         int selectedIndex = tabbedPane.getSelectedIndex();
         if (selectedIndex >= 0) {
-            return tabWebViews.get(selectedIndex);
+            Component selectedComponent = tabbedPane.getComponentAt(selectedIndex);
+            if (selectedComponent instanceof JPanel) {
+                Component component = ((JPanel) selectedComponent).getComponent(0);
+                if (component instanceof JFXPanel) {
+                    JFXPanel fxPanel = (JFXPanel) component;
+                    WebView webView = tabWebViews.get(fxPanel);
+                    if (webView != null) {
+                        return webView;
+                    }
+                }
+            }
         }
         return webView; // Fallback para o webview principal
     }
@@ -541,29 +574,36 @@ public class SwingBrowserApp extends JFrame {
         tabbedPane.addChangeListener(e -> {
             int selectedIndex = tabbedPane.getSelectedIndex();
             if (selectedIndex >= 0) {
-                WebEngine newEngine = tabEngines.get(selectedIndex);
-                WebView newWebView = tabWebViews.get(selectedIndex);
+                Component selectedComponent = tabbedPane.getComponentAt(selectedIndex);
+                if (selectedComponent instanceof JPanel) {
+                    Component component = ((JPanel) selectedComponent).getComponent(0);
+                    if (component instanceof JFXPanel) {
+                        JFXPanel fxPanel = (JFXPanel) component;
+                        WebEngine newEngine = tabEngines.get(fxPanel);
+                        WebView newWebView = tabWebViews.get(fxPanel);
 
-                if (newEngine != null && newWebView != null) {
-                    webEngine = newEngine;
-                    webView = newWebView;
+                        if (newEngine != null && newWebView != null) {
+                            webEngine = newEngine;
+                            webView = newWebView;
 
-                    // Atualizar barra de URL com a URL da aba selecionada
-                    Platform.runLater(() -> {
-                        String currentUrl = newEngine.getLocation();
-                        if (currentUrl != null && !currentUrl.isEmpty()) {
-                            urlBar.setText(currentUrl);
+                            // Atualizar barra de URL com a URL da aba selecionada
+                            Platform.runLater(() -> {
+                                String currentUrl = newEngine.getLocation();
+                                if (currentUrl != null && !currentUrl.isEmpty()) {
+                                    urlBar.setText(currentUrl);
+                                }
+                            });
+
+                            // Atualizar status dos botões de navegação
+                            updateNavButtons();
+
+                            // Atualizar zoom
+                            Platform.runLater(() -> {
+                                newWebView.setZoom(currentZoom);
+                                zoomLabel.setText(String.format("Zoom: %d%%", (int) (currentZoom * 100)));
+                            });
                         }
-                    });
-
-                    // Atualizar status dos botões de navegação
-                    updateNavButtons();
-
-                    // Atualizar zoom
-                    Platform.runLater(() -> {
-                        newWebView.setZoom(currentZoom);
-                        zoomLabel.setText(String.format("Zoom: %d%%", (int) (currentZoom * 100)));
-                    });
+                    }
                 }
             }
         });
@@ -646,6 +686,8 @@ public class SwingBrowserApp extends JFrame {
 
     private void setupWebView() {
         fxPanel = new JFXPanel();
+        fxPanel.setOpaque(true);
+        fxPanel.setFocusable(false);
 
         // Configurações específicas para Linux
         if (System.getProperty("os.name").toLowerCase().contains("linux")) {
@@ -662,8 +704,14 @@ public class SwingBrowserApp extends JFrame {
                 webView.setZoom(currentZoom);
                 webView.setFontScale(currentZoom * scalingFactor);
 
+                // Validar e configurar User-Agent
+                String userAgent = getUserAgent();
+                if (userAgent == null || userAgent.trim().isEmpty()) {
+                    userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+                }
+
                 webEngine.setJavaScriptEnabled(isJavaScriptEnabled());
-                webEngine.setUserAgent(getUserAgent());
+                webEngine.setUserAgent(userAgent);
 
                 // Cria a cena JavaFX
                 BorderPane webPane = new BorderPane(webView);
@@ -679,9 +727,8 @@ public class SwingBrowserApp extends JFrame {
                 // Adiciona o WebView a uma nova aba
                 SwingUtilities.invokeLater(() -> {
                     addNewTab("Nova aba", fxPanel);
-                    // Armazena o engine da primeira aba
-                    int firstTabIndex = tabbedPane.getTabCount() - 1;
-                    storeTabEngine(firstTabIndex, webEngine, webView);
+                    // Armazena o engine da primeira aba usando JFXPanel como chave
+                    storeTabEngine(fxPanel, webEngine, webView);
                 });
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
@@ -697,37 +744,79 @@ public class SwingBrowserApp extends JFrame {
         JPanel tabPanel = new JPanel(new BorderLayout());
         tabPanel.add(component, BorderLayout.CENTER);
 
-        // Adiciona um botão de fechar à aba
-        JPanel tabHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        // Cria header da aba com layout mais robusto
+        JPanel tabHeader = new JPanel(new BorderLayout(3, 0));
         tabHeader.setOpaque(false);
+        tabHeader.setFocusable(false);
+        tabHeader.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
+
+        // Painel de título
+        JPanel titlePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        titlePanel.setOpaque(false);
+        titlePanel.setFocusable(false);
+        titlePanel.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
 
         JLabel tabTitle = new JLabel(title);
         tabTitle.setFont(deriveFont(tabTitle.getFont()));
+        tabTitle.setFocusable(false);
+        titlePanel.add(tabTitle);
 
+        // Botão de fechar
         JButton closeButton = new JButton("×");
-        closeButton.setMargin(new Insets(0, 0, 0, 0));
+        closeButton.setMargin(new Insets(0, 3, 0, 3));
         closeButton.setFocusable(false);
         closeButton.setBorder(BorderFactory.createEmptyBorder());
         closeButton.setContentAreaFilled(false);
         closeButton.setRolloverEnabled(true);
-        closeButton.setFont(deriveFont(closeButton.getFont()));
+        closeButton.setFont(deriveFont(closeButton.getFont()).deriveFont(Font.BOLD, 16f));
+        closeButton.setCursor(new java.awt.Cursor(java.awt.Cursor.HAND_CURSOR));
 
         closeButton.addActionListener(e -> {
             int tabIndex = tabbedPane.indexOfComponent(tabPanel);
             if (tabbedPane.getTabCount() > 1) {
+                // Remover do mapa de engines usando o JFXPanel como chave
+                if (component instanceof JFXPanel) {
+                    tabEngines.remove(component);
+                    tabWebViews.remove(component);
+                }
                 tabbedPane.remove(tabIndex);
-                // Remover do mapa de engines
-                tabEngines.remove(tabIndex);
-                tabWebViews.remove(tabIndex);
             } else {
                 loadUrl(getHomePage());
             }
         });
 
-        tabHeader.add(tabTitle);
-        tabHeader.add(Box.createHorizontalStrut((int) (5 * scalingFactor)));
-        tabHeader.add(closeButton);
+        // Layout do header
+        tabHeader.add(titlePanel, BorderLayout.CENTER);
+        tabHeader.add(closeButton, BorderLayout.EAST);
 
+        // Adiciona área de padding
+        JPanel padding = new JPanel();
+        padding.setOpaque(false);
+        padding.setPreferredSize(new Dimension((int) (3 * scalingFactor), 0));
+        tabHeader.add(padding, BorderLayout.WEST);
+
+        // MouseListener para o header completo
+        MouseAdapter headerClickListener = new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                /* Clique no botão de fechar é tratado pelo ActionListener do botão */
+                if (closeButton.getModel().isArmed()) {
+                    return;
+                }
+                /* Clique em qualquer outra área do header seleciona a aba */
+                int tabIndex = tabbedPane.indexOfComponent(tabPanel);
+                if (tabIndex >= 0) {
+                    tabbedPane.setSelectedIndex(tabIndex);
+                }
+                e.consume();
+            }
+        };
+
+        tabHeader.addMouseListener(headerClickListener);
+        titlePanel.addMouseListener(headerClickListener);
+        tabTitle.addMouseListener(headerClickListener);
+
+        // Adiciona a aba
         tabbedPane.addTab(null, tabPanel);
         int newTabIndex = tabbedPane.getTabCount() - 1;
         tabbedPane.setTabComponentAt(newTabIndex, tabHeader);
@@ -735,11 +824,12 @@ public class SwingBrowserApp extends JFrame {
     }
 
     /**
-     * Armazenar um WebEngine de uma aba no mapa de rastreamento
+     * Armazenar um WebEngine de uma aba no mapa de rastreamento usando JFXPanel
+     * como chave
      */
-    private void storeTabEngine(int tabIndex, WebEngine engine, WebView webView) {
-        tabEngines.put(tabIndex, engine);
-        tabWebViews.put(tabIndex, webView);
+    private void storeTabEngine(JFXPanel fxPanel, WebEngine engine, WebView webView) {
+        tabEngines.put(fxPanel, engine);
+        tabWebViews.put(fxPanel, webView);
     }
 
     private void loadUrl(String url) {
@@ -804,7 +894,17 @@ public class SwingBrowserApp extends JFrame {
     private WebEngine getActiveWebEngine() {
         int selectedIndex = tabbedPane.getSelectedIndex();
         if (selectedIndex >= 0) {
-            return tabEngines.get(selectedIndex);
+            Component selectedComponent = tabbedPane.getComponentAt(selectedIndex);
+            if (selectedComponent instanceof JPanel) {
+                Component component = ((JPanel) selectedComponent).getComponent(0);
+                if (component instanceof JFXPanel) {
+                    JFXPanel fxPanel = (JFXPanel) component;
+                    WebEngine engine = tabEngines.get(fxPanel);
+                    if (engine != null) {
+                        return engine;
+                    }
+                }
+            }
         }
         return webEngine; // Fallback para o engine principal
     }
@@ -1032,7 +1132,13 @@ public class SwingBrowserApp extends JFrame {
 
     private void setJavaScriptEnabled(boolean enabled) {
         prefs.putBoolean("javaScriptEnabled", enabled);
-        Platform.runLater(() -> webEngine.setJavaScriptEnabled(enabled));
+        Platform.runLater(() -> {
+            webEngine.setJavaScriptEnabled(enabled);
+            // Atualizar JavaScript em todos os WebEngines das abas
+            for (WebEngine engine : tabEngines.values()) {
+                engine.setJavaScriptEnabled(enabled);
+            }
+        });
     }
 
     private String getUserAgent() {
@@ -1041,8 +1147,18 @@ public class SwingBrowserApp extends JFrame {
     }
 
     private void setUserAgent(String userAgent) {
+        if (userAgent == null || userAgent.trim().isEmpty()) {
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+        }
         prefs.put("userAgent", userAgent);
-        Platform.runLater(() -> webEngine.setUserAgent(userAgent));
+        final String finalUserAgent = userAgent;
+        Platform.runLater(() -> {
+            webEngine.setUserAgent(finalUserAgent);
+            // Atualizar User-Agent em todos os WebEngines das abas
+            for (WebEngine engine : tabEngines.values()) {
+                engine.setUserAgent(finalUserAgent);
+            }
+        });
     }
 
     /**
